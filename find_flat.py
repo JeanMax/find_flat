@@ -9,9 +9,10 @@ from multiprocessing import Pool
 import requests
 from bs4 import BeautifulSoup
 
+DEBUG = bool(os.environ.get("DEBUG", False))
+
 MAX_PAGES = 42
-OFFERS_PER_PAGE = 35
-POOL_SIZE = int(os.environ.get("POOL_SIZE", OFFERS_PER_PAGE))
+OFFERS_PER_PAGE = 35  # pool_size
 
 RESULTS_FILE = "flats_id.list"
 
@@ -38,13 +39,17 @@ HEADERS = {
 
 # IO #
 def read_flats_id():
+    if DEBUG:
+        return []
     with open("flats_id.list", mode="r") as f:
         flats_id = [line.rstrip('\n') for line in f]
     return flats_id
 
 
 def handle_results(results):
-    # print(results, len(results))  # DEBUG
+    if DEBUG:
+        print(results, len(results))  # DEBUG
+        return
     with open("flats_id.list", mode="a") as f:
         print("\n".join(results), file=f)
     for offer_id in results:
@@ -88,11 +93,23 @@ def parse_offers_list(content):
 def parse_text_from_offer(content):
     soup = BeautifulSoup(content, "lxml")
     text = soup.find("div", {"data-qa-id": "adview_description_container"})
+    # TODO: return None if no picture
+    # TODO: return None if foncia anywhere in page
     return text.get_text().replace("\n", " ")
 
 
 def is_offer_interesting(offer_text):
-    if re.match(".*(foncia|coloc|sous[- ]lo|ascenseur)", offer_text, re.I):
+    if re.match(r".*(foncia|coloc|sous[- ]lo)", offer_text, re.I):
+        return False
+    if re.match(r".*(ascen[sc]eur)", offer_text, re.I) and not re.match(
+            r".*(rdc|rez|(1\s?er?|premier)\s+[ée]tage)", offer_text, re.I
+    ):
+        return False
+    if re.match(
+            r".*(([2-9]\s?[eè](me)?"
+            + r"|(deuxi|troisi|quatri|cinqi|sixi|septi|huiti|neu[vf]i)[eè]me)"
+            + r"\s+[ée]tage)", offer_text, re.I
+    ):
         return False
     return True
 
@@ -115,7 +132,7 @@ def check_offer(offer):
 if __name__ == "__main__":
     prev_results = read_flats_id()
     results = []
-    with Pool(POOL_SIZE) as pool:
+    with Pool(OFFERS_PER_PAGE) as pool:
         for page in range(1, MAX_PAGES):
             print("Searching page", page)  # DEBUG
             search_content = get_url_content(SEARCH_URL.format(page))
