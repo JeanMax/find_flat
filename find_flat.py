@@ -5,6 +5,7 @@ import time
 import re
 import os
 from multiprocessing import Pool
+from multiprocessing.pool import ThreadPool
 
 import requests
 from bs4 import BeautifulSoup
@@ -12,22 +13,7 @@ from bs4 import BeautifulSoup
 DEBUG = bool(os.environ.get("DEBUG", False))
 
 MAX_PAGES = 42
-OFFERS_PER_PAGE = 35  # pool_size
 
-RESULTS_FILE = "flats_id.list"
-
-SEARCH_URL = "https://www.leboncoin.fr/recherche/?" \
-    + "&".join([
-        "category=10",  # locations
-        "locations=Paris",
-        "real_estate_type=2",  # appart
-        "price=600-800",
-        "square=20-max",
-        "furnished=1",  # meublé
-        # "rooms=2",
-        "page={}"
-    ])
-OFFER_URL = "https://www.leboncoin.fr/locations/{}.htm/"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:65.0) "
     + "Gecko/20100101 Firefox/65.0",
@@ -37,67 +23,7 @@ HEADERS = {
 }
 
 
-# IO #
-def read_flats_id():
-    if DEBUG:
-        return []
-    with open("flats_id.list", mode="r") as f:
-        flats_id = [line.rstrip('\n') for line in f]
-    return flats_id
-
-
-def handle_results(results):
-    if DEBUG:
-        print(results, len(results))  # DEBUG
-        return
-    with open("flats_id.list", mode="a") as f:
-        print("\n".join(results), file=f)
-    for offer_id in results:
-        os.system("firefox " + OFFER_URL.format(offer_id))
-
-
-# REQUESTS #
-
-def get_url_content(url):
-    while True:
-        try:
-            res = requests.get(url, headers=HEADERS)
-            if res.status_code != 200:
-                raise requests.RequestException
-        except requests.RequestException:
-            print("Warning: request failed for url:", url, file=sys.stderr)
-            time.sleep(1)
-        else:
-            break
-    return res.content
-
-
-# PARSERS #
-
-def parse_offers_list(content):
-    soup = BeautifulSoup(content, "lxml")
-    links = [
-        (l.get_text(), l.get("href"))
-        for l in soup("a")
-        if l.get("href") and re.match("/locations/[0-9]+.*", l.get("href"))
-    ]
-    return [
-        (
-            l[0].replace("\xa0", " "),
-            l[1].replace("/locations/", "").replace(".htm/", "")
-        )
-        for l in links
-    ]
-
-
-def parse_text_from_offer(content):
-    soup = BeautifulSoup(content, "lxml")
-    text = soup.find("div", {"data-qa-id": "adview_description_container"})
-    # TODO: return None if no picture
-    # TODO: return None if foncia anywhere in page
-    return text.get_text().replace("\n", " ")
-
-
+# FILTERS #
 def is_offer_interesting(offer_text):
     if re.match(r".*(foncia|coloc|sous[- ]lo)", offer_text, re.I):
         return False
@@ -114,38 +40,118 @@ def is_offer_interesting(offer_text):
     return True
 
 
-# WRAPPERS #
+# REQUESTS #
+def get_url_content(url):
+    while True:
+        try:
+            res = requests.get(url, headers=HEADERS)
+            if res.status_code != 200:
+                raise requests.RequestException
+        except requests.RequestException:
+            print("Warning: request failed for url:", url, file=sys.stderr)
+            time.sleep(1)
+        else:
+            break
+    return res.content
 
-def check_offer(offer):
-    offer_title, offer_id = offer[0], offer[1]
-    offer_content = get_url_content(OFFER_URL.format(offer_id))
-    offer_text = parse_text_from_offer(offer_content)
-    offer_text = "    ".join([offer_title, offer_text])
-    is_interesting = is_offer_interesting(offer_text)
-    if is_interesting:
-        print(offer_text, "\n")  # DEBUG
-    return is_interesting
+
+# LEBONCOIN #
+class Lbc():
+    offers_per_page = 35  # pool_size
+    results_file = "flats_id.list"
+    search_url = "https://www.leboncoin.fr/recherche/?" \
+        + "&".join([
+            "category=10",  # locations
+            "locations=Paris",
+            "real_estate_type=2",  # appart
+            "price=600-800",
+            "square=20-max",
+            "furnished=1",  # meublé
+            # "rooms=2",
+            "page={}"
+        ])
+    offer_url = "https://www.leboncoin.fr/locations/{}.htm/"
+
+    # IO #
+    def _read_flats_id(self):
+        if DEBUG:
+            return []
+        with open(self.results_file, mode="r") as f:
+            flats_id = [line.rstrip('\n') for line in f]
+        return flats_id
+
+    def _handle_results(self, results):
+        if DEBUG:
+            print(results, len(results))  # DEBUG
+            return
+        with open(self.results_file, mode="a") as f:
+            print("\n".join(results), file=f)
+        for offer_id in results:
+            os.system("firefox " + self.offer_url.format(offer_id))
+
+    # PARSERS #
+    def _parse_offers_list(self, content):
+        soup = BeautifulSoup(content, "lxml")
+        links = [
+            (l.get_text(), l.get("href"))
+            for l in soup("a")
+            if l.get("href") and re.match("/locations/[0-9]+.*", l.get("href"))
+        ]
+        return [
+            (
+                l[0].replace("\xa0", " "),
+                l[1].replace("/locations/", "").replace(".htm/", "")
+            )
+            for l in links
+        ]
+
+    def _parse_text_from_offer(self, content):
+        soup = BeautifulSoup(content, "lxml")
+        text = soup.find("div", {"data-qa-id": "adview_description_container"})
+        # TODO: return None if no picture
+        # TODO: return None if foncia anywhere in page
+        return text.get_text().replace("\n", " ")
+
+    # WRAPPERS #
+    def _check_offer(self, offer):
+        offer_title, offer_id = offer[0], offer[1]
+        offer_content = get_url_content(self.offer_url.format(offer_id))
+        offer_text = self._parse_text_from_offer(offer_content)
+        offer_text = "    ".join([offer_title, offer_text])
+        is_interesting = is_offer_interesting(offer_text)
+        if is_interesting:
+            print(offer_text, "\n")  # DEBUG
+        return is_interesting
+
+    # PUBLIC #
+    def scrap(self):
+        prev_results = self._read_flats_id()
+        results = []
+        with Pool(self.offers_per_page) as pool:
+            for page in range(1, MAX_PAGES):
+                print("Searching page", page)  # DEBUG
+                search_content = get_url_content(self.search_url.format(page))
+                offers = self._parse_offers_list(search_content)  # titles, ids
+                offers = [
+                    (offer_title, offer_id)
+                    for offer_title, offer_id in offers
+                    if offer_id not in prev_results
+                ]
+                if not len(offers):
+                    break
+                are_intersting = pool.map(self._check_offer, offers)
+                results += [
+                    offer[1] for i, offer in enumerate(offers)
+                    if are_intersting[i]
+                ]
+        self._handle_results(results)
 
 
 # MAIN #
-
 if __name__ == "__main__":
-    prev_results = read_flats_id()
-    results = []
-    with Pool(OFFERS_PER_PAGE) as pool:
-        for page in range(1, MAX_PAGES):
-            print("Searching page", page)  # DEBUG
-            search_content = get_url_content(SEARCH_URL.format(page))
-            offers = parse_offers_list(search_content)  # titles, ids
-            offers = [
-                (offer_title, offer_id)
-                for offer_title, offer_id in offers
-                if offer_id not in prev_results
-            ]
-            if not len(offers):
-                break
-            are_intersting = pool.map(check_offer, offers)
-            results += [
-                offer[1] for i, offer in enumerate(offers) if are_intersting[i]
-            ]
-    handle_results(results)
+    def not_a_lambda(scrapper):
+        scrapper.scrap()
+
+    scrappers = [Lbc()]
+    with ThreadPool(len(scrappers)) as pool:
+        pool.map(not_a_lambda, scrappers)
