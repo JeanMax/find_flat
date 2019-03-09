@@ -4,15 +4,14 @@ import sys
 import time
 import re
 import os
-from multiprocessing import Pool
-from multiprocessing.pool import ThreadPool
+from multiprocessing import Pool, Process
 
 import requests
 from bs4 import BeautifulSoup
 
 DEBUG = bool(os.environ.get("DEBUG", False))
 
-MAX_PAGES = 42
+MAX_PAGES = 42  # TODO: scrap it
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:65.0) "
@@ -21,6 +20,12 @@ HEADERS = {
     "Accept-Language": "en-US",
     "Accept-Encoding": "identity"
 }
+
+# SEARCH_FILTERS #
+SURFACE_MIN = "20"
+PRICE_MIN = "600"
+PRICE_MAX = "800"
+FURNISHED = True
 
 
 # FILTERS #
@@ -55,32 +60,25 @@ def get_url_content(url):
     return res.content
 
 
-# LEBONCOIN #
-class Lbc():
-    offers_per_page = 35  # pool_size
-    results_file = "flats_id.list"
-    search_url = "https://www.leboncoin.fr/recherche/?" \
-        + "&".join([
-            "category=10",  # locations
-            "locations=Paris",
-            "real_estate_type=2",  # appart
-            "price=600-800",
-            "square=20-max",
-            "furnished=1",  # meublé
-            # "rooms=2",
-            "page={}"
-        ])
-    offer_url = "https://www.leboncoin.fr/locations/{}.htm/"
-
-    # IO #
-    def _read_flats_id(self):
-        if DEBUG:
-            return []
-        with open(self.results_file, mode="r") as f:
+# IO #
+def read_flats_id(results_file):
+    if DEBUG:
+        return []
+    try:
+        with open(results_file, mode="r") as f:
             flats_id = [line.rstrip('\n') for line in f]
-        return flats_id
+    except FileNotFoundError:
+        return []
+    return flats_id
 
-    def _handle_results(self, results):
+
+def scrap_wrapper(scrapper_class):
+    scrapper_class().scrap()
+
+
+# BASE SCRAPPER CLASS #
+class BaseScrapper():
+    def _handle_results(self, results):  # TODO: move outside
         if DEBUG:
             print(results, len(results))  # DEBUG
             return
@@ -89,9 +87,64 @@ class Lbc():
         for offer_id in results:
             os.system("firefox " + self.offer_url.format(offer_id))
 
-    # PARSERS #
-    def _parse_offers_list(self, content):
+    def _check_offer(self, offer):
+        offer_title, offer_id = offer[0], offer[1]
+        offer_content = get_url_content(self.offer_url.format(offer_id))
+        offer_text = self._parse_text_from_offer(offer_content)
+        offer_text = "    ".join([offer_title, offer_text])
+        is_interesting = is_offer_interesting(offer_text)
+        if is_interesting:
+            print(offer_text, "\n")  # DEBUG
+        return is_interesting
+
+    def scrap(self):
+        prev_results = read_flats_id(self.results_file)
+        results = []
+        with Pool(self.offers_per_page) as pool:
+            for page in range(1, MAX_PAGES):
+                print("Searching page", page, self.__class__.__name__)  # DEBUG
+                search_content = get_url_content(self.search_url.format(page))
+                offers, is_last = self._parse_offers_list(search_content, page)
+                offers = [
+                    (offer_title, offer_id)
+                    for offer_title, offer_id in offers
+                    if offer_id not in prev_results
+                ]
+                are_intersting = pool.map(self._check_offer, offers)
+                results += [
+                    offer[1] for i, offer in enumerate(offers)
+                    if are_intersting[i]
+                ]
+                if is_last:
+                    break
+        self._handle_results(results)
+
+
+# LEBONCOIN #
+class Lbc(BaseScrapper):
+    offers_per_page = 35  # pool_size
+    results_file = "flats_id-lbc.list"
+    search_url = "https://www.leboncoin.fr/recherche/?" \
+        + "&".join([
+            "category=10",  # region"
+            "locations=Paris",
+            "price=" + PRICE_MIN + "-" + PRICE_MAX,
+            "square=" + SURFACE_MIN + "-max",
+            "furnished=" + "1" if FURNISHED else "0",
+            # "rooms=2",
+            "real_estate_type=2",  # appart
+            "page={}"
+        ])
+    offer_url = "https://www.leboncoin.fr/locations/{}.htm/"
+
+    def _parse_offers_list(self, content, page):
         soup = BeautifulSoup(content, "lxml")
+        is_last = not bool([
+            l.get("href")
+            for l in soup("a")
+            if l.get("href") and "page=" + str(page + 1) in l.get("href")
+        ])
+
         links = [
             (l.get_text(), l.get("href"))
             for l in soup("a")
@@ -103,7 +156,7 @@ class Lbc():
                 l[1].replace("/locations/", "").replace(".htm/", "")
             )
             for l in links
-        ]
+        ], is_last
 
     def _parse_text_from_offer(self, content):
         soup = BeautifulSoup(content, "lxml")
@@ -112,46 +165,61 @@ class Lbc():
         # TODO: return None if foncia anywhere in page
         return text.get_text().replace("\n", " ")
 
-    # WRAPPERS #
-    def _check_offer(self, offer):
-        offer_title, offer_id = offer[0], offer[1]
-        offer_content = get_url_content(self.offer_url.format(offer_id))
-        offer_text = self._parse_text_from_offer(offer_content)
-        offer_text = "    ".join([offer_title, offer_text])
-        is_interesting = is_offer_interesting(offer_text)
-        if is_interesting:
-            print(offer_text, "\n")  # DEBUG
-        return is_interesting
 
-    # PUBLIC #
-    def scrap(self):
-        prev_results = self._read_flats_id()
-        results = []
-        with Pool(self.offers_per_page) as pool:
-            for page in range(1, MAX_PAGES):
-                print("Searching page", page)  # DEBUG
-                search_content = get_url_content(self.search_url.format(page))
-                offers = self._parse_offers_list(search_content)  # titles, ids
-                offers = [
-                    (offer_title, offer_id)
-                    for offer_title, offer_id in offers
-                    if offer_id not in prev_results
-                ]
-                if not len(offers):
-                    break
-                are_intersting = pool.map(self._check_offer, offers)
-                results += [
-                    offer[1] for i, offer in enumerate(offers)
-                    if are_intersting[i]
-                ]
-        self._handle_results(results)
+# PAP #
+class Pap(BaseScrapper):
+    offers_per_page = 10  # pool_size
+    results_file = "flats_id-pap.list"
+    search_url = "https://www.pap.fr/annonce/locations-" + \
+        "-".join([
+            "appartement" + "-meuble" if FURNISHED else "",
+            "paris-75-g439",
+            "entre-" + PRICE_MIN + "-et-" + PRICE_MAX + "-euros",
+            "a-partir-de-" + SURFACE_MIN + "-m2",
+            "{}"
+        ])
+    offer_url = "https://www.pap.fr/annonces/appartement-{}"
+
+    def _parse_offers_list(self, content, unused):
+        soup = BeautifulSoup(content, "lxml")
+        is_last = not bool(soup.find("li", {"class": "next"}))
+        links = [
+            (l.get_text(), l.get("href"))
+            for l in soup("a")
+            if l.get("href")
+            and re.match("/annonces/appartement-.*", l.get("href"))
+        ]
+        return [
+            (
+                l[0].replace("\xa0", " ").replace("\n", " "),
+                l[1].replace("/annonces/appartement-", "")
+            )
+            for l in links
+        ], is_last
+
+    def _parse_text_from_offer(self, content):
+        soup = BeautifulSoup(content, "lxml")
+        text = soup.find("div", {"class": "item-description"})
+        # TODO: return None if no picture
+        # TODO: return None if foncia anywhere in page
+        return text.get_text().replace("\n", " ").replace("\t", " ")\
+                              .replace("\r", "").replace("\xa0", " ")
 
 
 # MAIN #
 if __name__ == "__main__":
-    def not_a_lambda(scrapper):
-        scrapper.scrap()
-
-    scrappers = [Lbc()]
-    with ThreadPool(len(scrappers)) as pool:
-        pool.map(not_a_lambda, scrappers)
+    scrappers = [Lbc, Pap]
+    processes = []
+    while len(scrappers) > 1:
+        p = Process(
+            target=scrap_wrapper,
+            args=(scrappers[0],),
+            daemon=False
+        )
+        p.start()
+        processes.append(p)
+        scrappers.pop(0)
+    scrap_wrapper(scrappers[0])
+    for p in processes:
+        p.join()
+        p.close()
