@@ -30,6 +30,9 @@ FURNISHED = True
 
 # FILTERS #
 def is_offer_interesting(offer_text):
+    # TODO: (before)
+    #     return None if no picture
+    #     return None if foncia anywhere in page
     if re.match(r".*(foncia|coloc|sous[- ]lo)", offer_text, re.I):
         return False
     if re.match(r".*(ascen[sc]eur)", offer_text, re.I) and not re.match(
@@ -72,21 +75,25 @@ def read_flats_id(results_file):
     return flats_id
 
 
+def write_flats_id(results, results_file):
+    with open(results_file, mode="a") as f:
+        print("\n".join(results), file=f)
+
+
+# STUPID WRAPPER #
 def scrap_wrapper(scrapper_class):
     scrapper_class().scrap()
 
 
-# BASE SCRAPPER CLASS #
 class BaseScrapper():
     def __init__(self):
         self.results_file = "flats_id-" + self.__class__.__name__ + ".list"
 
-    def _handle_results(self, results):  # TODO: move outside
+    def _handle_results(self, results):
         if DEBUG:
             print(results, len(results))  # DEBUG
             return
-        with open(self.results_file, mode="a") as f:
-            print("\n".join(results), file=f)
+        write_flats_id(results, self.results_file)
         for offer_id in results:
             os.system("firefox " + self.offer_url.format(offer_id))
 
@@ -163,8 +170,6 @@ class Leboncoin(BaseScrapper):
     def _parse_text_from_offer(self, content):
         soup = BeautifulSoup(content, "lxml")
         text = soup.find("div", {"data-qa-id": "adview_description_container"})
-        # TODO: return None if no picture
-        # TODO: return None if foncia anywhere in page
         return text.get_text().replace("\n", " ")
 
 
@@ -201,8 +206,6 @@ class Pap(BaseScrapper):
     def _parse_text_from_offer(self, content):
         soup = BeautifulSoup(content, "lxml")
         text = soup.find("div", {"class": "item-description"})
-        # TODO: return None if no picture
-        # TODO: return None if foncia anywhere in page
         return text.get_text().replace("\n", " ").replace("\t", " ")\
                               .replace("\r", "").replace("\xa0", " ")
 
@@ -246,14 +249,12 @@ class Immojeune(BaseScrapper):
     def _parse_text_from_offer(self, content):
         soup = BeautifulSoup(content, "lxml")
         text = soup.find("div", {"class": "content"}).get_text()
-        text += "".join([
-            t.get_text()
-            for t in soup.find("table", {"class": "informations"})(
-                    "td", {"class": "col-align-center"}
-            )
-        ])
-        # TODO: return None if no picture
-        # TODO: return None if foncia anywhere in page
+        # text += "".join([
+        #     t.get_text()
+        #     for t in soup.find("table", {"class": "informations"})(
+        #             "td", {"class": "col-align-center"}
+        #     )
+        # ])
         return text.replace("\n", " ")
 
 
