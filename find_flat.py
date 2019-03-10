@@ -10,9 +10,6 @@ import requests
 from bs4 import BeautifulSoup
 
 DEBUG = bool(os.environ.get("DEBUG", False))
-
-MAX_PAGES = 42  # TODO: scrap it
-
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:65.0) "
     + "Gecko/20100101 Firefox/65.0",
@@ -86,6 +83,8 @@ def scrap_wrapper(scrapper_class):
 
 
 class BaseScrapper():
+    max_pages = 42
+
     def __init__(self):
         self.results_file = "flats_id-" + self.__class__.__name__ + ".list"
 
@@ -111,7 +110,7 @@ class BaseScrapper():
         prev_results = read_flats_id(self.results_file)
         results = []
         with Pool(self.offers_per_page) as pool:
-            for page in range(1, MAX_PAGES):
+            for page in range(1, self.max_pages):
                 print("Searching page", page, self.__class__.__name__)  # DEBUG
                 search_content = get_url_content(self.search_url.format(page))
                 offers, is_last = self._parse_offers_list(search_content, page)
@@ -258,9 +257,52 @@ class Immojeune(BaseScrapper):
         return text.replace("\n", " ")
 
 
+class Seloger(BaseScrapper):
+    offers_per_page = 10  # 20  # pool_size
+    search_url = "https://www.seloger.com/list.htm?" \
+        + "&".join([
+            "types=1",
+            "projects=1",
+            "enterprise=0",
+            "furnished=" + "1" if FURNISHED else "0",
+            "price=" + PRICE_MIN + "/" + PRICE_MAX,
+            "surface=" + SURFACE_MIN + "/NaN",
+            "places=[{{ci:750056}}]",
+            "qsVersion=1.0",
+            "LISTING-LISTpg={}"
+        ])
+    offer_url = "https://www.seloger.com/annonces/locations/appartement/{}.htm"
+
+    def _parse_offers_list(self, content, unused):
+        soup = BeautifulSoup(content, "lxml")
+        is_last = not bool(soup.find("a", {"class": "pagination-next"}))
+        links = [
+            (l.get_text(), l.get("href"))
+            for l in soup("a")
+            if l.get("href")
+            and "\n\n" not in l.get_text()
+            and re.match("https://www.seloger.com/annonces/.*", l.get("href"))
+        ]
+        return [
+            (
+                l[0],
+                l[1].split("?")[0].replace(
+                    "https://www.seloger.com/annonces/locations/appartement/",
+                    ""
+                ).replace(".htm", "")
+            )
+            for l in links
+        ], is_last
+
+    def _parse_text_from_offer(self, content):
+        soup = BeautifulSoup(content, "lxml")
+        text = soup.find("input", {"name": "description"}).get("value")
+        return text.replace("\n", " ").replace("\r", "")
+
+
 # MAIN #
 if __name__ == "__main__":
-    scrappers = [Leboncoin, Pap, Immojeune]
+    scrappers = [Leboncoin, Pap, Immojeune, Seloger]
     processes = []
     while len(scrappers) > 1:
         p = Process(
