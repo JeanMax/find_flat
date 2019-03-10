@@ -66,7 +66,7 @@ def read_flats_id(results_file):
         return []
     try:
         with open(results_file, mode="r") as f:
-            flats_id = [line.rstrip('\n') for line in f]
+            flats_id = [line.rstrip("\n") for line in f]
     except FileNotFoundError:
         return []
     return flats_id
@@ -78,6 +78,9 @@ def scrap_wrapper(scrapper_class):
 
 # BASE SCRAPPER CLASS #
 class BaseScrapper():
+    def __init__(self):
+        self.results_file = "flats_id-" + self.__class__.__name__ + ".list"
+
     def _handle_results(self, results):  # TODO: move outside
         if DEBUG:
             print(results, len(results))  # DEBUG
@@ -120,8 +123,7 @@ class BaseScrapper():
         self._handle_results(results)
 
 
-# LEBONCOIN #
-class Lbc(BaseScrapper):
+class Leboncoin(BaseScrapper):
     offers_per_page = 35  # pool_size
     results_file = "flats_id-lbc.list"
     search_url = "https://www.leboncoin.fr/recherche/?" \
@@ -166,7 +168,6 @@ class Lbc(BaseScrapper):
         return text.get_text().replace("\n", " ")
 
 
-# PAP #
 class Pap(BaseScrapper):
     offers_per_page = 10  # pool_size
     results_file = "flats_id-pap.list"
@@ -206,9 +207,59 @@ class Pap(BaseScrapper):
                               .replace("\r", "").replace("\xa0", " ")
 
 
+class Immojeune(BaseScrapper):
+    offers_per_page = 8  # pool_size
+    search_url = "https://www.immojeune.com/location-etudiant/" \
+        + "paris-75.html?" + "&".join([
+            "priceMin=" + PRICE_MIN,
+            "priceMax=" + PRICE_MAX,
+            "surfaceMin=" + SURFACE_MIN,
+            "surfaceMax=100",
+            "furnished=" + "1" if FURNISHED else "0",
+            "around=0",
+            "page={}"
+        ])
+    offer_url = "https://www.immojeune.com/location-etudiant/{}.html"
+
+    def _parse_offers_list(self, content, unused):
+        soup = BeautifulSoup(content, "lxml")
+        is_last = not bool([
+            l for l in soup("a") if l.get_text() == 'Suivant'
+        ])
+        links = [
+            (l.get_text(), l.get("href"))
+            for l in soup("a")
+            if l.get("href")
+            and l.get_text() != "\n\n"
+            and "\nDéposer ma candidature\n" not in l.get_text()
+            and "chambre" not in l.get("href")
+            and re.match("/location-etudiant/.*/.*", l.get("href"))
+        ]
+        return [
+            (
+                l[0].replace("\n", ""),
+                l[1].replace("/location-etudiant/", "").replace(".html", "")
+            )
+            for l in links
+        ], is_last
+
+    def _parse_text_from_offer(self, content):
+        soup = BeautifulSoup(content, "lxml")
+        text = soup.find("div", {"class": "content"}).get_text()
+        text += "".join([
+            t.get_text()
+            for t in soup.find("table", {"class": "informations"})(
+                    "td", {"class": "col-align-center"}
+            )
+        ])
+        # TODO: return None if no picture
+        # TODO: return None if foncia anywhere in page
+        return text.replace("\n", " ")
+
+
 # MAIN #
 if __name__ == "__main__":
-    scrappers = [Lbc, Pap]
+    scrappers = [Leboncoin, Pap, Immojeune]
     processes = []
     while len(scrappers) > 1:
         p = Process(
