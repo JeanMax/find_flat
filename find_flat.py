@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 
 DEBUG = bool(os.environ.get("DEBUG", False))
 HERE = os.path.dirname(os.path.realpath(inspect.getsourcefile(lambda: 0)))
+LOG_DIR = os.path.join(HERE, "logs")
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:65.0) "
     + "Gecko/20100101 Firefox/65.0",
@@ -75,8 +76,9 @@ def read_flats_id(results_file):
 
 
 def write_flats_id(results, results_file):
-    with open(results_file, mode="a") as f:
-        print("\n".join(results), file=f)
+    if results:
+        with open(results_file, mode="a") as f:
+            print("\n".join(results), file=f)
 
 
 # STUPID WRAPPER #
@@ -88,17 +90,17 @@ class BaseScrapper():
     max_pages = 42
 
     def __init__(self):
-        self.results_file = os.path.join(
-            HERE,
-            "flats_id-" + self.__class__.__name__ + ".list"
-        )
+        filename = os.path.join(LOG_DIR, "flats_id-" + self.__class__.__name__)
+        self.good_results_file = filename + ".good"
+        self.bad_results_file = filename + ".bad"
 
-    def _handle_results(self, results):
+    def _handle_results(self, good_results, bad_results):
         if DEBUG:
-            print(results, len(results))  # DEBUG
+            print(good_results, len(bad_results))  # DEBUG
             return
-        write_flats_id(results, self.results_file)
-        for offer_id in results:
+        write_flats_id(good_results, self.good_results_file)
+        write_flats_id(bad_results, self.bad_results_file)
+        for offer_id in good_results:
             os.system("firefox " + self.offer_url.format(offer_id))
 
     def _check_offer(self, offer):
@@ -112,8 +114,10 @@ class BaseScrapper():
         return is_interesting
 
     def scrap(self):
-        prev_results = read_flats_id(self.results_file)
-        results = []
+        prev_results = read_flats_id(self.good_results_file)
+        prev_results += read_flats_id(self.bad_results_file)
+        good_results = []
+        bad_results = []
         with Pool(self.offers_per_page) as pool:
             for page in range(1, self.max_pages):
                 print("Searching page", page, self.__class__.__name__)  # DEBUG
@@ -125,18 +129,21 @@ class BaseScrapper():
                     if offer_id not in prev_results
                 ]
                 are_intersting = pool.map(self._check_offer, offers)
-                results += [
+                good_results += [
                     offer[1] for i, offer in enumerate(offers)
                     if are_intersting[i]
                 ]
+                bad_results += [
+                    offer[1] for i, offer in enumerate(offers)
+                    if not are_intersting[i]
+                ]
                 if is_last:
                     break
-        self._handle_results(results)
+        self._handle_results(good_results, bad_results)
 
 
 class Leboncoin(BaseScrapper):
     offers_per_page = 35  # pool_size
-    results_file = "flats_id-lbc.list"
     search_url = "https://www.leboncoin.fr/recherche/?" \
         + "&".join([
             "category=10",  # region"
@@ -179,7 +186,6 @@ class Leboncoin(BaseScrapper):
 
 class Pap(BaseScrapper):
     offers_per_page = 10  # pool_size
-    results_file = "flats_id-pap.list"
     search_url = "https://www.pap.fr/annonce/locations-" + \
         "-".join([
             "appartement" + "-meuble" if FURNISHED else "",
@@ -263,7 +269,7 @@ class Immojeune(BaseScrapper):
 
 
 class Seloger(BaseScrapper):
-    offers_per_page = 10  # 20  # pool_size
+    offers_per_page = 20  # pool_size
     search_url = "https://www.seloger.com/list.htm?" \
         + "&".join([
             "types=1",
