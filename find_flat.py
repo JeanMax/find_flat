@@ -4,12 +4,14 @@ import sys
 import time
 import re
 import os
+import inspect
 from multiprocessing import Pool, Process
 
 import requests
 from bs4 import BeautifulSoup
 
 DEBUG = bool(os.environ.get("DEBUG", False))
+HERE = os.path.dirname(os.path.realpath(inspect.getsourcefile(lambda: 0)))
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:65.0) "
     + "Gecko/20100101 Firefox/65.0",
@@ -86,7 +88,10 @@ class BaseScrapper():
     max_pages = 42
 
     def __init__(self):
-        self.results_file = "flats_id-" + self.__class__.__name__ + ".list"
+        self.results_file = os.path.join(
+            HERE,
+            "flats_id-" + self.__class__.__name__ + ".list"
+        )
 
     def _handle_results(self, results):
         if DEBUG:
