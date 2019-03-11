@@ -311,9 +311,56 @@ class Seloger(BaseScrapper):
         return text.replace("\n", " ").replace("\r", "")
 
 
+class Paruvendu(BaseScrapper):
+    offers_per_page = 10  # pool_size
+    search_url = "https://www.paruvendu.fr/immobilier/location/appartement/" \
+        + ("meuble" if FURNISHED else "") \
+        + "/paris-75/?" \
+        + "&".join([
+            "nbp=0",
+            "tt=5",
+            "tbApp=1",
+            "at=1",
+            "nbp0=99",
+            "sur0=" + SURFACE_MIN,
+            "px0=" + PRICE_MIN,
+            "px1=" + PRICE_MAX,
+            "lo=75",
+            "ddlFiltres=nofilter",
+            "p={}"
+        ])
+    offer_url = "https://www.paruvendu.fr/immobilier/location/{}"
+
+    def _parse_offers_list(self, content, unused):
+        soup = BeautifulSoup(content, "lxml")
+        is_last = not bool([
+            a for a in soup("a", {"class": "page"})
+            if "suivante" in a.get_text()
+        ])
+        links = [
+            (l.get_text(), l.get("href"))
+            for l in soup("a")
+            if l.get("href")
+            and re.match("/immobilier/location/.*/.*/.*", l.get("href"))
+            and l.get_text() == "Voir l'annonce"
+        ]
+        return [
+            (
+                l[0],
+                l[1].replace("/immobilier/location/", "")
+            )
+            for l in links
+        ], is_last
+
+    def _parse_text_from_offer(self, content):
+        soup = BeautifulSoup(content, "lxml")
+        text = soup.find("div", {"class": "im12_txt_ann im12_txt_ann_auto"})
+        return text.get_text().replace("\n", " ").replace("\r", "")
+
+
 # MAIN #
 if __name__ == "__main__":
-    scrappers = [Leboncoin, Pap, Immojeune, Seloger]
+    scrappers = [Leboncoin, Pap, Immojeune, Seloger, Paruvendu]
     processes = []
     while len(scrappers) > 1:
         p = Process(
