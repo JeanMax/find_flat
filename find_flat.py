@@ -25,7 +25,7 @@ HEADERS = {
 SURFACE_MIN = "20"
 PRICE_MIN = "600"
 PRICE_MAX = "800"
-FURNISHED = True
+FURNISHED = False
 
 
 # FILTERS #
@@ -360,7 +360,13 @@ class Paruvendu(BaseScrapper):
 
 # MAIN #
 if __name__ == "__main__":
-    scrappers = [Leboncoin, Pap, Immojeune, Seloger, Paruvendu]
+    scrappers = [
+        Leboncoin,
+        Pap,
+        Immojeune,
+        # Seloger,
+        Paruvendu,
+    ]
     processes = []
     while len(scrappers) > 1:
         p = Process(
